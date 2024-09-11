@@ -14,6 +14,9 @@ learning_rate = 1e-4
 max_len = 15
 dictionary = ["apple", "banana", "orange", "grape", "melon", "supercalifragilisticexpialidocious"]
 
+# Check if GPU is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Define the character-level tokenizer class
 class CharacterTokenizer:
     def __init__(self):
@@ -45,7 +48,7 @@ config = BertConfig(
 )
 
 # Initialize the BERT model with random weights
-model = BertForMaskedLM(config)
+model = BertForMaskedLM(config).to(device)
 
 # Function to pad or truncate input
 def pad_or_truncate(input_ids, max_len=max_len, pad_token_id=tokenizer.vocab['[PAD]']):
@@ -54,48 +57,41 @@ def pad_or_truncate(input_ids, max_len=max_len, pad_token_id=tokenizer.vocab['[P
     else:
         return input_ids + [pad_token_id] * (max_len - len(input_ids))  # Pad if shorter
 
-# Prepare training data with attention masks
-def create_training_data_with_attention_mask(dictionary, tokenizer, max_len=max_len):
+# Prepare training data
+def create_training_data(dictionary, tokenizer, max_len=max_len):
     inputs = []
     labels = []
-    attention_masks = []
-    
     for word in dictionary:
         tokenized_input = tokenizer.tokenize(word)
         input_ids = tokenizer.convert_tokens_to_ids(tokenized_input)
         input_ids = pad_or_truncate(input_ids, max_len=max_len)
-
-        # Create attention mask (1 for real tokens, 0 for padding)
-        attention_mask = [1 if token != tokenizer.vocab['[PAD]'] else 0 for token in input_ids]
+        label_ids = input_ids.copy()
         
         # Mask some characters
-        label_ids = input_ids.copy()
         for i in range(len(input_ids)):
             if input_ids[i] != tokenizer.vocab['[PAD]'] and torch.rand(1).item() < 0.15:
                 input_ids[i] = tokenizer.vocab['[MASK]']
         
         inputs.append(input_ids)
         labels.append(label_ids)
-        attention_masks.append(attention_mask)
+    
+    return torch.tensor(inputs).to(device), torch.tensor(labels).to(device)
 
-    return torch.tensor(inputs), torch.tensor(labels), torch.tensor(attention_masks)
+inputs, labels = create_training_data(dictionary, tokenizer)
 
-inputs, labels, attention_masks = create_training_data_with_attention_mask(dictionary, tokenizer)
-
-# Training the model with attention mask
-def fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model, epochs=epochs, learning_rate=learning_rate):
+# Training the model
+def fine_tune_model(inputs, labels, model, epochs=epochs, learning_rate=learning_rate):
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     model.train()
     
     for epoch in range(epochs):
         total_loss = 0
         for i in range(len(inputs)):
-            input_ids = inputs[i].unsqueeze(0)  # Add batch dimension
-            label_ids = labels[i].unsqueeze(0)  # Add batch dimension
-            attention_mask = attention_masks[i].unsqueeze(0)  # Add batch dimension
+            input_ids = inputs[i].unsqueeze(0).to(device)  # Add batch dimension and move to GPU
+            label_ids = labels[i].unsqueeze(0).to(device)  # Add batch dimension and move to GPU
             
             optimizer.zero_grad()
-            outputs = model(input_ids, labels=label_ids, attention_mask=attention_mask)
+            outputs = model(input_ids, labels=label_ids)
             loss = outputs.loss
             loss.backward()
             optimizer.step()
@@ -106,7 +102,7 @@ def fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model, 
         
         print(f"Epoch {epoch+1} complete, Average Loss: {total_loss / len(inputs)}")
 
-fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model)
+fine_tune_model(inputs, labels, model)
 
 # Save the trained model
 def save_model_and_tokenizer(model, tokenizer, model_path=model_path, tokenizer_path=tokenizer_path):
@@ -120,7 +116,7 @@ def save_model_and_tokenizer(model, tokenizer, model_path=model_path, tokenizer_
 def load_model_and_tokenizer(model_path=model_path, tokenizer_path=tokenizer_path):
     from transformers import BertForMaskedLM
     
-    model = BertForMaskedLM.from_pretrained(model_path)
+    model = BertForMaskedLM.from_pretrained(model_path).to(device)
     
     # Load the tokenizer
     with open(tokenizer_path, 'rb') as f:
@@ -134,21 +130,16 @@ save_model_and_tokenizer(model, tokenizer)
 # Load model and tokenizer
 model, tokenizer = load_model_and_tokenizer()
 
-# Implement the guessing strategy with attention mask
-def guess_next_letter_with_attention_mask(current_word, guessed_letters, model, tokenizer, max_len=max_len):
+# Implement the guessing strategy
+def guess_next_letter(current_word, guessed_letters, model, tokenizer, max_len=max_len):
     tokenized_input = tokenizer.tokenize(current_word)
     input_ids = tokenizer.convert_tokens_to_ids(tokenized_input)
     input_ids = pad_or_truncate(input_ids, max_len=max_len)
-    
-    # Create attention mask for the input
-    attention_mask = [1 if token != tokenizer.vocab['[PAD]'] else 0 for token in input_ids]
-    
-    inputs = torch.tensor([input_ids])
-    attention_mask = torch.tensor([attention_mask])
+    inputs = torch.tensor([input_ids]).to(device)
 
     model.eval()
     with torch.no_grad():
-        outputs = model(inputs, attention_mask=attention_mask)
+        outputs = model(inputs)
     
     predictions = outputs.logits[0]
     
@@ -165,5 +156,5 @@ def guess_next_letter_with_attention_mask(current_word, guessed_letters, model, 
 # Example usage
 current_word = '_ e _ _ e t _'
 guessed_letters = {'e', 't'}
-next_guess = guess_next_letter_with_attention_mask(current_word, guessed_letters, model, tokenizer)
+next_guess = guess_next_letter(current_word, guessed_letters, model, tokenizer)
 print(f"Next guessed letter: {next_guess}")
