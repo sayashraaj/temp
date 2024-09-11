@@ -1,3 +1,59 @@
+from transformers import BertConfig, BertForMaskedLM
+import torch
+import pickle
+
+# Define variables
+max_word_length = 15
+hidden_size = 256
+num_attention_heads = 4
+num_hidden_layers = 4
+model_path = 'path/to/save/model'
+tokenizer_path = 'path/to/save/tokenizer.pkl'
+epochs = 3
+learning_rate = 1e-4
+max_len = 15
+dictionary = ["apple", "banana", "orange", "grape", "melon", "supercalifragilisticexpialidocious"]
+
+# Define the character-level tokenizer class
+class CharacterTokenizer:
+    def __init__(self):
+        self.vocab = {chr(i): i - 97 for i in range(97, 123)}  # a-z
+        self.vocab['[MASK]'] = len(self.vocab)
+        self.vocab['[PAD]'] = len(self.vocab) + 1
+        self.vocab['[UNK]'] = 0
+
+    def tokenize(self, word):
+        return [char if char != '_' else '[MASK]' for char in word]
+
+    def convert_tokens_to_ids(self, tokens):
+        return [self.vocab.get(t, self.vocab['[UNK]']) for t in tokens]
+
+    def convert_ids_to_tokens(self, ids):
+        inv_vocab = {v: k for k, v in self.vocab.items()}
+        return [inv_vocab.get(i, '[UNK]') for i in ids]
+
+# Initialize tokenizer
+tokenizer = CharacterTokenizer()
+
+# Define BERT model configuration
+config = BertConfig(
+    vocab_size=len(tokenizer.vocab),
+    max_position_embeddings=max_word_length,
+    hidden_size=hidden_size,
+    num_attention_heads=num_attention_heads,
+    num_hidden_layers=num_hidden_layers
+)
+
+# Initialize the BERT model with random weights
+model = BertForMaskedLM(config)
+
+# Function to pad or truncate input
+def pad_or_truncate(input_ids, max_len=max_len, pad_token_id=tokenizer.vocab['[PAD]']):
+    if len(input_ids) > max_len:
+        return input_ids[:max_len]  # Truncate if longer than max_len
+    else:
+        return input_ids + [pad_token_id] * (max_len - len(input_ids))  # Pad if shorter
+
 # Prepare training data with attention masks
 def create_training_data_with_attention_mask(dictionary, tokenizer, max_len=max_len):
     inputs = []
@@ -8,7 +64,7 @@ def create_training_data_with_attention_mask(dictionary, tokenizer, max_len=max_
         tokenized_input = tokenizer.tokenize(word)
         input_ids = tokenizer.convert_tokens_to_ids(tokenized_input)
         input_ids = pad_or_truncate(input_ids, max_len=max_len)
-        
+
         # Create attention mask (1 for real tokens, 0 for padding)
         attention_mask = [1 if token != tokenizer.vocab['[PAD]'] else 0 for token in input_ids]
         
@@ -26,6 +82,7 @@ def create_training_data_with_attention_mask(dictionary, tokenizer, max_len=max_
 
 inputs, labels, attention_masks = create_training_data_with_attention_mask(dictionary, tokenizer)
 
+# Training the model with attention mask
 def fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model, epochs=epochs, learning_rate=learning_rate):
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     model.train()
@@ -50,6 +107,32 @@ def fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model, 
         print(f"Epoch {epoch+1} complete, Average Loss: {total_loss / len(inputs)}")
 
 fine_tune_model_with_attention_mask(inputs, labels, attention_masks, model)
+
+# Save the trained model
+def save_model_and_tokenizer(model, tokenizer, model_path=model_path, tokenizer_path=tokenizer_path):
+    model.save_pretrained(model_path)
+    
+    # Save the tokenizer
+    with open(tokenizer_path, 'wb') as f:
+        pickle.dump(tokenizer, f)
+
+# Load the trained model and tokenizer
+def load_model_and_tokenizer(model_path=model_path, tokenizer_path=tokenizer_path):
+    from transformers import BertForMaskedLM
+    
+    model = BertForMaskedLM.from_pretrained(model_path)
+    
+    # Load the tokenizer
+    with open(tokenizer_path, 'rb') as f:
+        tokenizer = pickle.load(f)
+    
+    return model, tokenizer
+
+# Example usage
+save_model_and_tokenizer(model, tokenizer)
+
+# Load model and tokenizer
+model, tokenizer = load_model_and_tokenizer()
 
 # Implement the guessing strategy with attention mask
 def guess_next_letter_with_attention_mask(current_word, guessed_letters, model, tokenizer, max_len=max_len):
@@ -84,4 +167,3 @@ current_word = '_ e _ _ e t _'
 guessed_letters = {'e', 't'}
 next_guess = guess_next_letter_with_attention_mask(current_word, guessed_letters, model, tokenizer)
 print(f"Next guessed letter: {next_guess}")
-
