@@ -1,0 +1,129 @@
+from transformers import BertConfig, BertForMaskedLM, BertTokenizer, AdamW
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+from torch.optim.lr_scheduler import StepLR
+import random
+
+# Define variables
+max_word_length = 15
+hidden_size = 128  # Reduced hidden size
+num_attention_heads = 2  # Reduced number of attention heads
+num_hidden_layers = 2  # Reduced number of hidden layers
+model_path = 'path/to/save/model'
+tokenizer_path = 'path/to/save/tokenizer.pkl'
+epochs = 5
+learning_rate = 1e-4
+max_len = 15
+batch_size = 32
+dictionary = ["apple", "banana", "orange", "grape", "melon", "supercalifragilisticexpialidocious"]
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Use a pre-trained BERT tokenizer
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+# Load the pre-trained BERT model
+model = BertForMaskedLM.from_pretrained('bert-base-uncased').to(device)
+
+# Add dropout
+model.config.hidden_dropout_prob = 0.3
+
+# Function to pad or truncate input and generate attention masks
+def pad_or_truncate(input_ids, max_len=max_len, pad_token_id=tokenizer.pad_token_id):
+    attention_mask = [1] * len(input_ids)
+    if len(input_ids) > max_len:
+        input_ids = input_ids[:max_len]
+        attention_mask = attention_mask[:max_len]
+    else:
+        pad_length = max_len - len(input_ids)
+        input_ids += [pad_token_id] * pad_length
+        attention_mask += [0] * pad_length
+    return input_ids, attention_mask
+
+# Dynamic masking function
+def mask_input(input_ids):
+    masked_input = input_ids.copy()
+    for i in range(len(input_ids)):
+        if random.random() < 0.15 and input_ids[i] != tokenizer.pad_token_id:
+            masked_input[i] = tokenizer.mask_token_id
+    return masked_input
+
+# Label smoothing function
+def label_smoothing_loss(preds, labels, smoothing=0.1):
+    confidence = 1.0 - smoothing
+    pred_probs = torch.nn.functional.log_softmax(preds, dim=-1)
+    nll_loss = -pred_probs.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
+    smooth_loss = -pred_probs.mean(dim=-1)
+    return confidence * nll_loss + smoothing * smooth_loss
+
+# Prepare training data
+def create_training_data(dictionary, tokenizer, max_len=max_len):
+    inputs = []
+    labels = []
+    attention_masks = []
+    for word in dictionary:
+        input_ids = tokenizer.encode(word, add_special_tokens=False)
+        input_ids, attention_mask = pad_or_truncate(input_ids, max_len=max_len)
+        masked_input = mask_input(input_ids)
+        
+        inputs.append(masked_input)
+        labels.append(input_ids)
+        attention_masks.append(attention_mask)
+
+    return torch.tensor(inputs), torch.tensor(labels), torch.tensor(attention_masks)
+
+inputs, labels, attention_masks = create_training_data(dictionary, tokenizer)
+
+# Create a DataLoader for batching
+dataset = TensorDataset(inputs, labels, attention_masks)
+data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# Define the optimizer with weight decay
+optimizer = AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+
+# Learning rate scheduler
+scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
+
+# Gradient clipping
+def clip_gradients(model, max_norm=1.0):
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+# Training the model with dynamic masking and label smoothing
+def fine_tune_model(data_loader, model, epochs=epochs, learning_rate=learning_rate):
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        for batch_idx, batch in enumerate(data_loader):
+            input_ids, label_ids, attention_mask = [b.to(device) for b in batch]
+
+            optimizer.zero_grad()
+            outputs = model(input_ids, attention_mask=attention_mask)
+
+            # Apply label smoothing to the loss function
+            smoothed_loss = label_smoothing_loss(outputs.logits.view(-1, model.config.vocab_size), label_ids.view(-1))
+
+            smoothed_loss.backward()
+
+            # Clip gradients to stabilize training
+            clip_gradients(model)
+
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += smoothed_loss.item()
+            if (batch_idx + 1) % 100 == 0:
+                print(f"Epoch {epoch+1}, Batch {batch_idx+1}, Loss: {smoothed_loss.item()}")
+
+        avg_loss = total_loss / len(data_loader)
+        print(f"Epoch {epoch+1} complete, Average Loss: {avg_loss}")
+
+# Train the model
+fine_tune_model(data_loader, model)
+
+# Save the trained model
+def save_model_and_tokenizer(model, tokenizer, model_path=model_path, tokenizer_path=tokenizer_path):
+    model.save_pretrained(model_path)
+    tokenizer.save_pretrained(tokenizer_path)
+
+save_model_and_tokenizer(model, tokenizer)
