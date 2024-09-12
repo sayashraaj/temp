@@ -1,7 +1,9 @@
 from transformers import BertConfig, BertForMaskedLM
 import torch
 import pickle
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
+import csv
 
 # Define variables
 max_word_length = 15
@@ -15,6 +17,7 @@ learning_rate = 1e-4
 max_len = 15
 batch_size = 32
 dictionary = ["apple", "banana", "orange", "grape", "melon", "supercalifragilisticexpialidocious"]
+loss_file_path = 'path/to/save/loss.csv'
 
 # Define the character-level tokenizer class (without whitespace as a token)
 class CharacterTokenizer:
@@ -51,14 +54,14 @@ model = BertForMaskedLM(config)
 
 # Function to pad or truncate input and generate attention masks
 def pad_or_truncate(input_ids, max_len=max_len, pad_token_id=tokenizer.vocab['[PAD]']):
-    attention_mask = [1] * len(input_ids)  # Initialize attention mask as 1 for each token
+    attention_mask = [1] * len(input_ids)
     if len(input_ids) > max_len:
         input_ids = input_ids[:max_len]
-        attention_mask = attention_mask[:max_len]  # Truncate attention mask
+        attention_mask = attention_mask[:max_len]
     else:
         pad_length = max_len - len(input_ids)
         input_ids += [pad_token_id] * pad_length
-        attention_mask += [0] * pad_length  # Pad attention mask with 0
+        attention_mask += [0] * pad_length
 
     return input_ids, attention_mask
 
@@ -90,14 +93,21 @@ inputs, labels, attention_masks = create_training_data(dictionary, tokenizer)
 dataset = TensorDataset(inputs, labels, attention_masks)
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-# Training the model
+# Save training loss in a CSV file
+def save_loss_to_file(epoch, loss, file_path=loss_file_path):
+    with open(file_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([epoch, loss])
+
+# Training the model and plotting the loss
 def fine_tune_model(data_loader, model, epochs=epochs, learning_rate=learning_rate):
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     model.train()
 
+    epoch_losses = []  # For plotting
     for epoch in range(epochs):
         total_loss = 0
-        for batch in data_loader:
+        for batch_idx, batch in enumerate(data_loader):
             input_ids, label_ids, attention_mask = batch
 
             optimizer.zero_grad()
@@ -107,11 +117,24 @@ def fine_tune_model(data_loader, model, epochs=epochs, learning_rate=learning_ra
             optimizer.step()
 
             total_loss += loss.item()
-            if (batch_idx + 1) % 100 == 0:
-                print(f"Epoch {epoch+1}, Batch {batch_idx+1}, Loss: {loss.item()}")
 
-        print(f"Epoch {epoch+1} complete, Average Loss: {total_loss / len(data_loader)}")
+        avg_loss = total_loss / len(data_loader)
+        epoch_losses.append(avg_loss)
 
+        print(f"Epoch {epoch+1} complete, Average Loss: {avg_loss}")
+
+        # Save loss to file
+        save_loss_to_file(epoch + 1, avg_loss)
+
+    # Plot loss curve
+    plt.plot(range(1, epochs + 1), epoch_losses, label='Training Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+    plt.show()
+
+# Train the model and plot the loss
 fine_tune_model(data_loader, model)
 
 # Save the trained model
@@ -122,50 +145,5 @@ def save_model_and_tokenizer(model, tokenizer, model_path=model_path, tokenizer_
     with open(tokenizer_path, 'wb') as f:
         pickle.dump(tokenizer, f)
 
-# Load the trained model and tokenizer
-def load_model_and_tokenizer(model_path=model_path, tokenizer_path=tokenizer_path):
-    from transformers import BertForMaskedLM
-
-    model = BertForMaskedLM.from_pretrained(model_path)
-
-    # Load the tokenizer
-    with open(tokenizer_path, 'rb') as f:
-        tokenizer = pickle.load(f)
-
-    return model, tokenizer
-
-# Example usage
+# Example usage to save the model
 save_model_and_tokenizer(model, tokenizer)
-
-# Load model and tokenizer
-model, tokenizer = load_model_and_tokenizer()
-
-# Implement the guessing strategy
-def guess_next_letter(current_word, guessed_letters, model, tokenizer, max_len=max_len):
-    tokenized_input = tokenizer.tokenize(current_word)
-    input_ids = tokenizer.convert_tokens_to_ids(tokenized_input)
-    input_ids, attention_mask = pad_or_truncate(input_ids, max_len=max_len)
-    inputs = torch.tensor([input_ids])
-    attention_mask = torch.tensor([attention_mask])
-
-    model.eval()
-    with torch.no_grad():
-        outputs = model(inputs, attention_mask=attention_mask)
-
-    predictions = outputs.logits[0]
-
-    # Find the best prediction that hasn't been guessed yet
-    for idx, token in enumerate(tokenized_input):
-        if token == '[MASK]':
-            char_logits = predictions[idx]
-            sorted_indices = torch.argsort(char_logits, descending=True)
-            for pred_idx in sorted_indices:
-                predicted_char = tokenizer.convert_ids_to_tokens([pred_idx.item()])[0]
-                if predicted_char not in guessed_letters:
-                    return predicted_char
-
-# Example usage
-current_word = '_ e _ _ e t _'
-guessed_letters = {'e', 't'}
-next_guess = guess_next_letter(current_word, guessed_letters, model, tokenizer)
-print(f"Next guessed letter: {next_guess}")
