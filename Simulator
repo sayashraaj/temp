@@ -1,0 +1,77 @@
+import random
+
+# A simple dictionary of words for the simulation
+word_list = ["apple", "banana", "cherry", "grape", "mango", "orange", "peach", "pear"]
+
+class HangmanSimulator:
+    def __init__(self, word):
+        self.word = word
+        self.masked_word = ['_'] * len(word)  # Initially all underscores
+        self.guessed_letters = set()
+        self.incorrect_guesses = 0
+        self.max_incorrect_guesses = 6
+
+    def display_masked_word(self):
+        # Display the masked word with spaces between the characters
+        return ' '.join(self.masked_word)
+
+    def process_guess(self, guess):
+        if guess in self.guessed_letters:
+            return False, f"'{guess}' has already been guessed."
+        
+        self.guessed_letters.add(guess)
+        
+        if guess in self.word:
+            for i, letter in enumerate(self.word):
+                if letter == guess:
+                    self.masked_word[i] = guess
+            return True, self.display_masked_word()
+        else:
+            self.incorrect_guesses += 1
+            return False, f"Incorrect guess! You have {self.max_incorrect_guesses - self.incorrect_guesses} tries left."
+
+    def is_game_won(self):
+        return '_' not in self.masked_word
+
+    def is_game_lost(self):
+        return self.incorrect_guesses >= self.max_incorrect_guesses
+
+# The guess function you want to test
+class GuessingAlgorithm:
+    def __init__(self):
+        self.guessed_letters = set()
+        self.full_dictionary = word_list  # Placeholder for your dictionary
+    
+    def guess(self, word):
+        # For simplicity, we'll just guess letters in alphabetical order
+        for letter in "abcdefghijklmnopqrstuvwxyz":
+            if letter not in self.guessed_letters:
+                self.guessed_letters.add(letter)
+                return letter
+
+# Function to simulate the game
+def play_hangman_simulation():
+    # Randomly select a word from the word list
+    selected_word = random.choice(word_list)
+    
+    # Initialize the game and algorithm
+    game = HangmanSimulator(selected_word)
+    algorithm = GuessingAlgorithm()
+    
+    print(f"Starting the game with the word: {game.display_masked_word()}")
+
+    while not game.is_game_won() and not game.is_game_lost():
+        current_word_state = game.display_masked_word()
+        guess = algorithm.guess(current_word_state)
+        print(f"Guessed letter: {guess}")
+        
+        correct, message = game.process_guess(guess)
+        print(message)
+        
+        if game.is_game_won():
+            print(f"Congratulations! You've guessed the word: {''.join(game.masked_word)}")
+        elif game.is_game_lost():
+            print(f"Game over! The word was: {game.word}")
+
+# Run the simulation
+play_hangman_simulation()
