@@ -1,0 +1,128 @@
+import numpy as np
+import torch
+import torch.nn.functional as F
+from geomloss import SamplesLoss
+from scipy.stats import wasserstein_distance
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import random
+
+
+seed_value = 42  # Example seed value
+
+# Set seeds
+np.random.seed(seed_value)
+torch.manual_seed(seed_value)
+random.seed(seed_value)
+
+# Function for Correlation Preservation
+def evaluate_correlation_preservation(original_data, reconstructed_data):
+    # Calculate correlation matrices
+    original_corr = np.corrcoef(original_data, rowvar=False)
+    reconstructed_corr = np.corrcoef(reconstructed_data, rowvar=False)
+    
+    # Calculate Mean Absolute Error (MAE) between original and reconstructed correlations
+    mae_corr = np.mean(np.abs(original_corr - reconstructed_corr))
+    
+    # Plot heatmaps
+    plt.figure(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
+    sns.heatmap(original_corr, annot=False, cmap="coolwarm", vmin=-1, vmax=1)
+    plt.title('Original Data Correlation Matrix')
+    
+    plt.subplot(1, 2, 2)
+    sns.heatmap(reconstructed_corr, annot=False, cmap="coolwarm", vmin=-1, vmax=1)
+    plt.title('Reconstructed Data Correlation Matrix')
+    
+    plt.show()
+    
+    print(f'Mean Absolute Error in Correlation Matrices: {mae_corr}')
+    
+    return mae_corr
+
+# Function for Distribution Discrepancy
+def evaluate_distribution_discrepancy(original_data, reconstructed_data):
+    # 1. Wasserstein Distance (for each feature pair)
+    avg_wasserstein = np.mean([wasserstein_distance(original_data[:, i], reconstructed_data[:, i])
+                               for i in range(original_data.shape[1])])
+    print(f'Average Wasserstein Distance: {avg_wasserstein}')
+    
+    # 2. Maximum Mean Discrepancy (MMD) using geomloss
+    original_data_tensor = torch.tensor(original_data, dtype=torch.float32)
+    reconstructed_data_tensor = torch.tensor(reconstructed_data, dtype=torch.float32)
+    
+    # Maximum Mean Discrepancy (MMD)
+    loss_fn = SamplesLoss(loss="gaussian", blur=0.1)
+    mmd_loss = loss_fn(original_data_tensor, reconstructed_data_tensor)
+    
+    print(f'MMD Loss: {mmd_loss.item()}')
+    
+    return avg_wasserstein, mmd_loss.item()
+
+# Function for Latent Space Analysis (PCA and t-SNE)
+def latent_space_analysis(vae_model, data_scaled):
+    # Get the latent representations of the original data
+    with torch.no_grad():
+        latent_space = vae_model.encode(torch.tensor(data_scaled, dtype=torch.float32))[0].numpy()
+    
+    # PCA for dimensionality reduction to 2D
+    pca = PCA(n_components=2)
+    latent_pca = pca.fit_transform(latent_space)
+    
+    plt.figure(figsize=(8, 6))
+    plt.scatter(latent_pca[:, 0], latent_pca[:, 1], c='blue', alpha=0.5)
+    plt.title('PCA of Latent Space')
+    plt.show()
+    
+    # t-SNE for latent space visualization
+    tsne = TSNE(n_components=2)
+    latent_tsne = tsne.fit_transform(latent_space)
+    
+    plt.figure(figsize=(8, 6))
+    plt.scatter(latent_tsne[:, 0], latent_tsne[:, 1], c='green', alpha=0.5)
+    plt.title('t-SNE of Latent Space')
+    plt.show()
+
+# Function for Interpolation in Latent Space
+def latent_space_interpolation(vae_model, data_scaled, n_steps=10):
+    # Randomly pick two points from the dataset
+    with torch.no_grad():
+        latent1 = vae_model.encode(torch.tensor([data_scaled[0]], dtype=torch.float32))[0]
+        latent2 = vae_model.encode(torch.tensor([data_scaled[1]], dtype=torch.float32))[0]
+    
+    # Interpolate between the two points in latent space
+    interpolated_points = [(latent1 + (latent2 - latent1) * t / (n_steps - 1)) for t in range(n_steps)]
+    
+    # Decode interpolated latent vectors back into data space
+    interpolated_data = [vae_model.decode(latent).detach().numpy() for latent in interpolated_points]
+    
+    # Plot the interpolation
+    plt.figure(figsize=(8, 6))
+    for i, data in enumerate(interpolated_data):
+        plt.plot(data.flatten(), label=f'Step {i}')
+    plt.title('Interpolation in Latent Space')
+    plt.legend()
+    plt.show()
+
+
+# Main evaluation function
+def evaluate_models(vae, complex_data, reconstructed_data, data_scaled):
+    # 1. Correlation Preservation
+    mae_corr = evaluate_correlation_preservation(complex_data, reconstructed_data)
+
+    # 2. Distribution Discrepancy
+    avg_wasserstein, mmd_loss = evaluate_distribution_discrepancy(complex_data, reconstructed_data)
+
+    # 3. Latent Space Analysis
+    latent_space_analysis(vae, data_scaled)
+
+    # 4. Latent Space Interpolation
+    latent_space_interpolation(vae, data_scaled)
+
+    return mae_corr, avg_wasserstein, mmd_loss
+
+# Example Usage (assuming you have your VAE, original complex_data, reconstructed_data, and scaled data)
+mae_corr, avg_wasserstein, mmd_loss = evaluate_models(vae, complex_data, reconstructed_data, data_scaled)
