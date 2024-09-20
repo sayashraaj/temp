@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
+import os
 
 # Define Transformer-based VAE with Beta-VAE Class
 class TransformerVAE(nn.Module):
@@ -62,7 +63,7 @@ class TransformerVAE(nn.Module):
         return self.decode(z), mu, logvar
 
 # Training Function with Beta-VAE Loss
-def train_vae(vae, data_loader, epochs, optimizer):
+def train_vae(vae, data_loader, epochs, optimizer, save_path):
     recon_losses = []
     kl_losses = []
     
@@ -97,6 +98,12 @@ def train_vae(vae, data_loader, epochs, optimizer):
         
         print(f'Epoch {epoch}: Recon Loss: {avg_recon_loss:.4f}, KL Loss: {avg_kl_loss:.4f}')
     
+    # Save the losses to a text file
+    with open(os.path.join(save_path, "losses.txt"), 'w') as f:
+        f.write("Epoch\tRecon Loss\tKL Loss\n")
+        for i in range(len(recon_losses)):
+            f.write(f"{i}\t{recon_losses[i]:.4f}\t{kl_losses[i]:.4f}\n")
+
     return recon_losses, kl_losses
 
 # Generate Correlated Data with Different Means and Standard Deviations
@@ -115,8 +122,12 @@ def generate_correlated_data(data_size):
     data = np.random.multivariate_normal(means, cov_matrix, size=data_size)
     return data
 
+# Create a directory to store results
+save_path = "vae_results"
+os.makedirs(save_path, exist_ok=True)
+
 # Generate Data
-data_size = 100000
+data_size = 100
 complex_data = generate_correlated_data(data_size)
 scaler = MinMaxScaler()
 data_scaled = scaler.fit_transform(complex_data)
@@ -133,9 +144,8 @@ optimizer = torch.optim.Adam(vae.parameters(), lr=0.0001)
 data_loader = torch.utils.data.DataLoader(data_tensor, batch_size=128, shuffle=True)
 
 # Train the VAE
-recon_losses, kl_losses = train_vae(vae, data_loader, epochs=100, optimizer=optimizer)
+recon_losses, kl_losses = train_vae(vae, data_loader, epochs=100, optimizer=optimizer, save_path=save_path)
 
-#####################
 # Inverse Transform the Output
 with torch.no_grad():
     # Encode the original data to get the latent representation
@@ -143,7 +153,14 @@ with torch.no_grad():
     reconstructed_data = vae.decode(mu).numpy()  # Use mu as input for decoding
     reconstructed_data = scaler.inverse_transform(reconstructed_data)
 
-# Plotting Losses
+# Save correlation matrices
+original_corr = np.corrcoef(complex_data.T)
+reconstructed_corr = np.corrcoef(reconstructed_data.T)
+
+np.savetxt(os.path.join(save_path, "original_corr_matrix.txt"), original_corr, fmt="%.4f")
+np.savetxt(os.path.join(save_path, "reconstructed_corr_matrix.txt"), reconstructed_corr, fmt="%.4f")
+
+# Plotting Losses and Save as Image
 plt.figure(figsize=(12, 6))
 plt.plot(recon_losses, label='Reconstruction Loss')
 plt.plot(kl_losses, label='KL Loss')
@@ -151,6 +168,7 @@ plt.title('Losses over Epochs')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.legend()
+plt.savefig(os.path.join(save_path, "losses_plot.png"))  # Save the plot
 plt.show()
 
 # Visualization of Original vs. Reconstructed Data using Histograms
@@ -161,14 +179,8 @@ plt.title('Original vs. Reconstructed Data Distribution')
 plt.xlabel('Values')
 plt.ylabel('Density')
 plt.legend()
+plt.savefig(os.path.join(save_path, "data_histograms.png"))  # Save the histogram
 plt.show()
 
-# Check Correlation Matrices
-original_corr = np.corrcoef(complex_data.T)
-reconstructed_corr = np.corrcoef(reconstructed_data.T)
-
-print("Original Data Correlation Matrix:")
-print(original_corr)
-
-print("\nReconstructed Data Correlation Matrix:")
-print(reconstructed_corr)
+# Save the final model
+torch.save(vae.state_dict(), os.path.join(save_path, "vae_model.pth"))
